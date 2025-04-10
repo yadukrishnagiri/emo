@@ -1,63 +1,28 @@
 import json
-import google.generativeai as genai
+from ai_report_generator import AIReportGenerator
 
 def generate_report_with_gemini(json_file, output_file, api_key):
     try:
-        # Configure Gemini
-        genai.configure(api_key=api_key)
-        
-        # Use gemini-2.0-flash model
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # Use our AI report generator with ChromaDB caching
+        report_generator = AIReportGenerator(api_key)
         
         # Read JSON file
         with open(json_file, 'r') as file:
             data = json.load(file)
         
-        # Create prompt text
-        prompt_text = f"""
-        Generate a professional candidate evaluation report based on the following analysis:
-
-        Audio Analysis:
-        - Duration: {data['audio_analysis']['duration_seconds']} seconds
-        - Sentiment: {data['audio_analysis']['overall_sentiment']}
-        - Clarity Score: {data['audio_analysis']['speech_analysis']['clarity_score']}%
-        - Pace Score: {data['audio_analysis']['speech_analysis']['pace_score']}%
-        - Confidence Score: {data['audio_analysis']['speech_analysis']['confidence_score']}%
-        - Words per Minute: {data['audio_analysis']['summary']['words_per_minute']}
-
-        Video Analysis:
-        - Eye Contact: {data['video_analysis']['metrics']['facial_expressions']['eye_contact']}%
-        - Genuineness: {data['video_analysis']['metrics']['facial_expressions']['genuineness']}%
-        - Posture Confidence: {data['video_analysis']['metrics']['posture']['upright_confident']}%
-        - Engagement: {data['video_analysis']['metrics']['overall_energy']['engagement']}%
-
-        Transcript:
-        {data['transcript']}
-
-        Please provide:
-        1. Executive Summary
-        2. Communication Skills Assessment
-        3. Body Language Analysis
-        4. Technical Knowledge Evaluation
-        5. Overall Impression
-        6. Recommendations for Improvement
-        7. Final Score (0-100)
-        """
+        # Generate report using the cached generator
+        evaluation_text, score = report_generator.generate_report(data)
         
-        # Format content properly according to API requirements
-        content = {
-            "parts": [
-                {"text": prompt_text}
-            ]
-        }
-        
-        # Generate report
-        response = model.generate_content(content)
-        
-        if response.text:
+        if evaluation_text:
             with open(output_file, 'w', encoding='utf-8') as file:
-                file.write(response.text)
+                file.write(evaluation_text)
             print(f"Report successfully generated and saved to: {output_file}")
+            
+            # Also save score separately
+            score_file = output_file.replace("_evaluation.txt", "_score.txt")
+            with open(score_file, 'w') as file:
+                file.write(f"Final Score: {score}/100")
+            print(f"Score saved to: {score_file}")
         else:
             print("Error: Empty response from Gemini")
             

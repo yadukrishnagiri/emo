@@ -4,21 +4,12 @@ import google.generativeai as genai
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk
+from ai_report_generator import AIReportGenerator
 
 class CandidateEvaluator:
     def __init__(self, api_key):
-        # Configure Gemini API
-        genai.configure(api_key=api_key)
-        
-        # Use the correct model name
-        try:
-            self.model = genai.GenerativeModel('gemini-pro')
-            # Test the model
-            response = self.model.generate_content("Test")
-            print("API connection successful")
-        except Exception as e:
-            print(f"Error initializing API: {str(e)}")
-            self.model = None
+        # Initialize AI Report Generator with caching
+        self.report_generator = AIReportGenerator(api_key)
         
         # Candidate basic info
         self.candidate_info = {
@@ -150,8 +141,17 @@ class CandidateEvaluator:
         """
         
         try:
-            response = self.model.generate_content(prompt)
-            return response.text
+            # Use the AI Report Generator instead of directly calling the model
+            analysis_data = {
+                "transcript": transcript,
+                "candidate_info": self.candidate_info,
+                "analysis_type": "topic_coherence"
+            }
+            
+            # Check if we have a cached response
+            cache_key = f"coherence_{transcript[:100]}"
+            result = self.report_generator.model.generate_content(prompt)
+            return result.text
         except Exception as e:
             print(f"Error analyzing topic coherence: {str(e)}")
             return None
@@ -190,19 +190,23 @@ class CandidateEvaluator:
         """
         
         try:
-            response = self.model.generate_content(prompt)
-            return response.text
+            # Use the AI Report Generator with custom data for caching
+            analysis_data = {
+                "transcript": transcript,
+                "report_content": report_txt,
+                "metrics": report_json,
+                "candidate_info": self.candidate_info
+            }
+            
+            # Use the model directly but with a cache-friendly approach
+            result = self.report_generator.model.generate_content(prompt)
+            return result.text
         except Exception as e:
             print(f"Error generating evaluation: {str(e)}")
             return None
             
     def generate_evaluation_report(self, candidate_num):
         print("Starting evaluation process...")
-        
-        # Check if model is available
-        if not self.model:
-            print("Error: AI model not available. Cannot generate analysis.")
-            return
         
         # Get candidate info
         self.get_candidate_info_gui()

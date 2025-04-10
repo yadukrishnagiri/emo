@@ -10,14 +10,26 @@ from datetime import datetime
 import google.generativeai as genai
 import tkinter as tk
 from tkinter import filedialog
+from chroma_cache import SpeechAnalysisCache
+from ai_report_generator import AIReportGenerator
 
 # Replace with your AssemblyAI API key
 API_KEY = "3af788588a404358aa3edf58900d1fcc"  # Get from https://www.assemblyai.com/
 
+# Initialize cache
+speech_cache = SpeechAnalysisCache()
+
 def analyze_audio(audio_path):
-    """Analyze audio using AssemblyAI"""
+    """Analyze audio using AssemblyAI with ChromaDB caching"""
     try:
-        print("Starting audio analysis...")
+        print("Checking cache for audio analysis...")
+        # Try to get analysis from cache first
+        cached_analysis = speech_cache.get_cached_analysis(audio_path=audio_path)
+        if cached_analysis:
+            print("Using cached analysis results")
+            return cached_analysis
+            
+        print("No cached analysis found, processing audio...")
         headers = {
             "authorization": API_KEY,
             "content-type": "application/json"
@@ -91,7 +103,8 @@ def analyze_audio(audio_path):
                         positive_segments = sum(1 for seg in sentiment_results if seg.get('sentiment') == 'POSITIVE')
                         engagement_score = round((positive_segments / len(sentiment_results) * 100) if sentiment_results else 50, 2)
                         
-                        return {
+                        # Create analysis result
+                        analysis_result = {
                             "duration_seconds": duration,
                             "overall_sentiment": polling_result.get('sentiment', 'NEUTRAL'),
                             "speech_analysis": {
@@ -108,6 +121,11 @@ def analyze_audio(audio_path):
                             "text": polling_result.get('text', ''),
                             "recommendations": []
                         }
+                        
+                        # Cache the analysis results
+                        speech_cache.cache_analysis(analysis_result, audio_path=audio_path)
+                        
+                        return analysis_result
                     else:
                         print("Warning: No words detected in the audio")
                         raise Exception("No speech detected")
@@ -419,10 +437,14 @@ def extract_content(video_path, paths, candidate_name, candidate_id):
             json.dump(full_analysis, f, indent=4)
         print("✓ JSON report saved")
         
-        # Generate AI evaluation
+        # Generate AI evaluation using the cached generator
         api_key = "AIzaSyB5tQYKNZM8TMkvTmnfwnRK7p0nwWDA0Yo"
         print("\n6. Generating AI Evaluation...")
-        evaluation_text, score = generate_ai_report(full_analysis, paths, api_key)
+        
+        # Initialize the AI report generator with caching
+        report_generator = AIReportGenerator(api_key)
+        evaluation_text, score = report_generator.generate_report(full_analysis)
+        
         print("✓ AI evaluation complete")
         
         try:
@@ -539,85 +561,12 @@ Recommendations
         print(f"Error generating text report: {str(e)}")
 
 def generate_ai_report(analysis_data, paths, api_key):
-    """Generate AI evaluation report using Gemini"""
-    try:
-        # Calculate score first
-        score = int((
-            analysis_data['audio_analysis']['speech_analysis']['clarity_score'] +
-            analysis_data['audio_analysis']['speech_analysis']['pace_score'] +
-            analysis_data['video_analysis']['metrics']['facial_expressions']['eye_contact'] +
-            analysis_data['video_analysis']['metrics']['facial_expressions']['genuineness'] +
-            analysis_data['video_analysis']['metrics']['posture']['upright_confident'] +
-            analysis_data['video_analysis']['metrics']['overall_energy']['engagement']
-        ) / 6)
-
-        # Create evaluation report text
-        evaluation_text = f"""## Candidate Evaluation Report
-
-**1. Executive Summary:**
-The candidate demonstrated {analysis_data['audio_analysis']['overall_sentiment'].lower()} communication with clarity score of {analysis_data['audio_analysis']['speech_analysis']['clarity_score']}% and engagement level of {analysis_data['video_analysis']['metrics']['overall_energy']['engagement']}%.
-
-**2. Communication Skills Assessment:**
-- Clarity Score: {analysis_data['audio_analysis']['speech_analysis']['clarity_score']}%
-- Pace Score: {analysis_data['audio_analysis']['speech_analysis']['pace_score']}%
-- Words per Minute: {analysis_data['audio_analysis']['summary']['words_per_minute']}
-- Overall Sentiment: {analysis_data['audio_analysis']['overall_sentiment']}
-
-**3. Body Language Analysis:**
-- Eye Contact: {analysis_data['video_analysis']['metrics']['facial_expressions']['eye_contact']}%
-- Genuineness: {analysis_data['video_analysis']['metrics']['facial_expressions']['genuineness']}%
-- Posture Confidence: {analysis_data['video_analysis']['metrics']['posture']['upright_confident']}%
-- Engagement: {analysis_data['video_analysis']['metrics']['overall_energy']['engagement']}%
-
-**4. Technical Knowledge Evaluation:**
-Based on transcript analysis:
-{analysis_data.get('transcript', 'No transcript available')}
-
-**5. Overall Impression:**
-The candidate shows {analysis_data['video_analysis']['metrics']['facial_expressions']['genuineness']}% genuineness in expressions and {analysis_data['video_analysis']['metrics']['posture']['upright_confident']}% confidence in posture.
-
-**6. Recommendations for Improvement:**
-{generate_recommendations(analysis_data)}
-
-**7. Final Score:**
-{score}/100
-"""
-        
-        # Save evaluation report
-        evaluation_path = paths['evaluation']
-        with open(evaluation_path, 'w', encoding='utf-8') as f:
-            f.write(evaluation_text)
-        print(f"Evaluation report saved to: {evaluation_path}")
-        
-        # Save score separately
-        score_path = paths['score']
-        with open(score_path, 'w', encoding='utf-8') as f:
-            f.write(f"Final Score: {score}/100")
-        print(f"Score saved to: {score_path}")
-        
-        return evaluation_text, score
-            
-    except Exception as e:
-        print(f"Error generating report: {str(e)}")
-        return None, 0
-
-def generate_recommendations(data):
-    """Generate specific recommendations based on scores"""
-    recommendations = []
-    
-    if data['audio_analysis']['speech_analysis']['clarity_score'] < 90:
-        recommendations.append("- Work on speech clarity and pronunciation")
-    if data['audio_analysis']['speech_analysis']['pace_score'] < 90:
-        recommendations.append("- Adjust speaking pace to improve delivery")
-    if data['video_analysis']['metrics']['facial_expressions']['eye_contact'] < 90:
-        recommendations.append("- Maintain more consistent eye contact")
-    if data['video_analysis']['metrics']['posture']['upright_confident'] < 90:
-        recommendations.append("- Improve posture to project more confidence")
-    
-    if not recommendations:
-        recommendations.append("- Continue maintaining current performance levels")
-    
-    return "\n".join(recommendations)
+    """
+    Legacy function, maintained for backward compatibility.
+    Now uses the AIReportGenerator class for report generation with caching.
+    """
+    report_generator = AIReportGenerator(api_key)
+    return report_generator.generate_report(analysis_data)
 
 def detect_microexpression(landmarks):
     """Detect subtle facial movements"""
