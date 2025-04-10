@@ -10,14 +10,17 @@ from datetime import datetime
 import google.generativeai as genai
 import tkinter as tk
 from tkinter import filedialog
+from tkinter import messagebox
 from chroma_cache import SpeechAnalysisCache
 from ai_report_generator import AIReportGenerator
+from content_validator import ContentValidator
 
 # Replace with your AssemblyAI API key
 API_KEY = "3af788588a404358aa3edf58900d1fcc"  # Get from https://www.assemblyai.com/
 
-# Initialize cache
+# Initialize cache and content validator
 speech_cache = SpeechAnalysisCache()
+content_validator = ContentValidator()
 
 def analyze_audio(audio_path):
     """Analyze audio using AssemblyAI with ChromaDB caching"""
@@ -404,34 +407,89 @@ def extract_content(video_path, paths, candidate_name, candidate_id):
         print("\n=== Starting Extraction Process ===")
         print("This may take a few minutes...")
         
+        # First validate that the video contains a proper interview
+        print("\n1. Validating Video Content...")
+        validation_results = content_validator.validate_video(
+            video_path, 
+            audio_path=None,  # We haven't extracted audio yet
+            api_key=None  # Don't use API for initial validation
+        )
+        
+        # If video doesn't appear to be a valid interview, warn the user
+        if not validation_results["is_valid"]:
+            print(f"⚠️ Warning: Video may not contain interview content")
+            print(f"Reason: {validation_results['reason']}")
+            print(f"Confidence: {validation_results['confidence']}%")
+            
+            # Ask user if they want to continue anyway
+            proceed = input("Do you want to proceed with processing anyway? (y/n): ").lower().strip()
+            if proceed != 'y':
+                print("Process cancelled by user")
+                return
+        else:
+            print(f"✓ Video content validated (confidence: {validation_results['confidence']}%)")
+        
         # Process files
-        print("\n1. Processing Audio...")
+        print("\n2. Processing Audio...")
         stream = ffmpeg.input(video_path)
         stream = ffmpeg.output(stream, paths['audio'], acodec='libmp3lame', ac=1, ar='16k')
         ffmpeg.run(stream, overwrite_output=True, quiet=True)  # Added quiet=True
         print("✓ Audio extracted successfully")
         
-        print("\n2. Processing Video...")
+        # Now that we have audio, do a more thorough content validation
+        validation_with_transcript = content_validator.validate_video(
+            video_path, 
+            audio_path=paths['audio'],
+            api_key=API_KEY
+        )
+        
+        # If content validation fails more severely with transcript analysis
+        if validation_with_transcript["confidence"] < 50 and validation_with_transcript["is_valid"] == False:
+            print(f"\n⚠️ CRITICAL WARNING: This does not appear to be an interview video")
+            print(f"Details: {validation_with_transcript['reason']}")
+            
+            if "transcript_content" in validation_with_transcript["checks"]:
+                transcript_check = validation_with_transcript["checks"]["transcript_content"]
+                if "transcript_preview" in transcript_check:
+                    print(f"Transcript preview: {transcript_check['transcript_preview']}")
+            
+            # Ask user if they want to continue despite the warning
+            proceed = input("Do you want to proceed anyway? (y/n): ").lower().strip()
+            if proceed != 'y':
+                print("Process cancelled by user")
+                
+                # Clean up extracted audio file
+                try:
+                    os.remove(paths['audio'])
+                    print("✓ Temporary audio file removed")
+                except:
+                    pass
+                    
+                return
+            print("Proceeding despite content validation failure")
+        
+        print("\n3. Processing Video...")
         stream = ffmpeg.input(video_path)
         stream = ffmpeg.output(stream, paths['video'], an=None)
         ffmpeg.run(stream, overwrite_output=True, quiet=True)  # Added quiet=True
         print("✓ Video processed successfully")
         
-        print("\n3. Analyzing Audio (this may take a minute)...")
+        print("\n4. Analyzing Audio (this may take a minute)...")
         analysis = analyze_audio(paths['audio'])
         print("✓ Audio analysis complete")
         
-        print("\n4. Analyzing Video...")
+        print("\n5. Analyzing Video...")
         video_analysis = analyze_video(video_path)
         print("✓ Video analysis complete")
         
         full_analysis = {
             "audio_analysis": analysis,
             "video_analysis": video_analysis,
-            "transcript": analysis.get('text', '')
+            "transcript": analysis.get('text', ''),
+            "validation_results": validation_with_transcript
         }
         
-        print("\n5. Generating Reports...")
+        print("\n6. Generating Reports...")
         # Save JSON report
         with open(paths['report'], 'w', encoding='utf-8') as f:
             json.dump(full_analysis, f, indent=4)
@@ -439,16 +497,27 @@ def extract_content(video_path, paths, candidate_name, candidate_id):
         
         # Generate AI evaluation using the cached generator
         api_key = "AIzaSyB5tQYKNZM8TMkvTmnfwnRK7p0nwWDA0Yo"
-        print("\n6. Generating AI Evaluation...")
+        print("\n7. Generating AI Evaluation...")
+        
+        # Add a warning to the report if content validation failed
+        if not validation_with_transcript["is_valid"]:
+            validation_warning = f"\n⚠️ WARNING: This video may not contain interview content. Validation confidence: {validation_with_transcript['confidence']}%.\n"
+            evaluation_prefix = validation_warning
+        else:
+            evaluation_prefix = ""
         
         # Initialize the AI report generator with caching
         report_generator = AIReportGenerator(api_key)
         evaluation_text, score = report_generator.generate_report(full_analysis)
         
+        # Add the warning to the beginning of the report if needed
+        if evaluation_prefix:
+            evaluation_text = evaluation_prefix + evaluation_text
+        
         print("✓ AI evaluation complete")
         
         try:
-            print("\n7. Saving Files Locally...")
+            print("\n8. Saving Files Locally...")
             # Save local files
             with open(paths['evaluation'], 'w', encoding='utf-8') as f:
                 f.write(evaluation_text)
@@ -610,6 +679,25 @@ if __name__ == "__main__":
     
     if video_file:
         base_path = r"C:\Users\yaduk\OneDrive\Desktop\Projects\major\emo"
+        
+        # Validate file before processing
+        try:
+            print("\nValidating file...")
+            initial_validation = content_validator.validate_video(video_file)
+            if not initial_validation["is_valid"]:
+                print(f"\n⚠️ Warning: This video may not contain interview content")
+                print(f"Reason: {initial_validation['reason']}")
+                print(f"Confidence: {initial_validation['confidence']}%")
+                
+                # Show message box warning
+                messagebox.showwarning(
+                    "Content Validation Warning",
+                    f"This video may not contain proper interview content.\n\nReason: {initial_validation['reason']}\n\nDo you want to continue anyway?"
+                )
+                
+                root.update()  # Update the UI
+        except Exception as e:
+            print(f"Error during initial validation: {str(e)}")
         
         # Generate paths with candidate info
         paths = get_candidate_paths(base_path, candidate_name, candidate_id)
